@@ -1,0 +1,91 @@
+load "msh3"
+load "medit"
+
+// --- Domaine geometrique et maillage ---
+
+//grandeurs geometriques
+real L=100;
+real R1 = 150;
+real R2 = 180;
+real z0 = 0, z1 = 100;
+real h = z1 - z0;
+
+//nombres de points de discr.
+int coefnpoints = 2;
+int nBaseSide = 5 * coefnpoints;
+int nBaseArc = 50 * coefnpoints;
+int nHeight = 10 * coefnpoints;
+
+//base
+border Gamma1 (t=0,1) {x=R1+(R2-R1)*t; y=0; label=1;};
+border Gamma2 (t=0,2*pi/3) {x=R2*cos(t); y=R2*sin(t); label=3;};
+real xC = R2 * cos(2*pi/3);
+real yC = R2 * sin(2*pi/3);
+real xD = R1 * cos(2*pi/3);
+real yD = R1 * sin(2*pi/3);
+border Gamma3 (t=0,1) {x=(1-t)*xC + t*xD; y=(1-t)*yC + t*yD; label=1;};
+border Gamma4 (t=2*pi/3, 0) {x=R1*cos(t); y=R1*sin(t); label=2;};
+mesh Thx = buildmesh(Gamma1(nBaseSide) + Gamma2(nBaseArc) + Gamma3(nBaseSide)
+                     + Gamma4(nBaseArc));
+
+plot(Thx);
+
+//layers
+int [int] labelmid=[1,1,3,3,2,2];
+int [int] labelup=[0,2];
+int [int] labeldown=[0,1];
+
+// Conditions aux limites :
+//1 pour encastrement; 2 pour l'air; 3 pour l'eau
+
+func fx = x * (1 + ((6*z)/(5*sqrt(x^2 + y^2)) - z/R1));
+func fy = y * (1 + ((6*z)/(5*sqrt(x^2 + y^2)) - z/R1));
+func fz = z;
+mesh3 Th = buildlayers(Thx, nHeight, zbound=[z0,z1], transfo=[fx, fy, fz], labelmid=labelmid, labelup=labelup, labeldown=labeldown);
+
+//taille du maillage
+fespace Ph(Th, P0);
+Ph diam = hTriangle;
+cout << "size of mesh = " << diam[].max << endl;
+
+// --- Donnees ---
+
+real E = 12E9, nu = 0.15;              // module de Young en dyne/cm et coef. de Poisson
+real mu = E/(2*(1+nu));                  // coeff. de Lame
+real lambda = E*nu/((1+nu)*(1-2*nu));    // coeff. de Lame
+real rhoBeton = 2100, g = 9.81;
+real rhoEau = 1000;
+
+func gravitVolumique = - rhoBeton * g; //force volumique
+func pressionEauSurfx = - rhoEau * g * (h-z) * x / (sqrt(x^2 + y^2)); //force surfacique
+func pressionEauSurfy = - rhoEau * g * (h-z) * y / (sqrt(x^2 + y^2)); //force surfacique
+func pressionEauSurfz = 0; //force surfacique
+
+// --- Espace element fini et formulation variationnelle ---
+
+fespace Vh(Th,P1);
+Vh u1,u2,u3, v1,v2,v3;
+real sqrt2=sqrt(2.);
+
+macro epsilon(u1,u2,u3) [dx(u1), dy(u2), dz(u3),
+		                (dy(u1)+dx(u2)) / sqrt2,
+                        (dz(u1)+dx(u3)) / sqrt2,
+                        (dy(u3)+dz(u2)) / sqrt2] //fin de macro
+
+macro div(u1,u2,u3) [dx(u1) + dy(u2) + dz(u3)] //fin de macro
+
+solve lame([u1,u2,u3],[v1,v2,v3])= int3d(Th)(2*mu*(epsilon(u1,u2,u3)'*epsilon(v1,v2,v3))
+                                            +lambda*div(u1,u2,u3)*div(v1,v2,v3))
+                                 - int3d(Th)(- gravitVolumique*v3)
+	                             - int2d(Th,2)(pressionEauSurfx*v1 + pressionEauSurfy*v2 + pressionEauSurfz*v3)
+                                 + on(1, u1 = 0, u2 = 0, u3 = 0);
+
+// --- Exploitation des resultats ---
+
+medit("barragemesh", Th, wait=true); //affichage du barrage initial
+real coef = 1000; // coefficient d amplification
+plot([u1, u2, u3], coef=coef); // affichage du champ de deplacement
+//medit([u1*coef, u2*coef, u3*coef]);
+mesh3 Thd = movemesh3(Th, transfo = [x+u1*coef, y+u2*coef, z+u3*coef]);
+medit("barragesolved", Thd); // affichage du maillage deforme
+//plot(Thd);
